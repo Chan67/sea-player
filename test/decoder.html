@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <input type="file" onchange="handleVideoFiles(this.files)">
+    <canvas id="video" style="width: 100%; height: 100%;"></canvas>
+    <script src="../wasm/libffmpeg.js"></script>
+    <script src="./webgl-render.js"></script>
+    <script src="./webgl.js"></script>
+    <script>
+        let renderCanvas;
+        let renderList = [];
+        let canvas = document.getElementById('video');
+        // canvas.width = 300;
+        // canvas.height = 300;
+        // let ctx = canvas.getContext('2d');
+        renderCanvas = new WebGLRender(canvas);
+        // renderCanvas = new WebGLPlayer(canvas);
+
+        function handleVideoFiles(files) {
+            readFile(files);
+        }
+        setInterval(() => {
+            if (renderList.length > 0) {
+                let data = renderList.shift();
+                var width = data.width;
+                var height = data.height;
+                // canvas.width = width;
+                // canvas.height = height;
+
+                renderCanvas.render(data.buffer, data.width, data.height);
+
+                // var yLength = width * height;
+                // var uvLength = (width / 2) * (height / 2);
+                // renderCanvas.renderFrame(data.buffer, width, height, yLength, uvLength);
+
+                // var imageData = ctx.createImageData(width, height);
+                // var drawData = imageData.data,
+                //     pixelCount = width * height * 4;
+                // for (var i = 0; i < pixelCount; i += 4) {
+                //     drawData[i + 3] = 255;
+                // }
+                // _yuv2RGBA(data.buffer, width, height, imageData.data);
+                // ctx.putImageData(imageData, 0, 0);
+            }
+        }, 1000 / 30);
+
+        Module.onRuntimeInitialized = () => {
+            init();
+        }
+        function init() {
+            console.log('init');
+
+            var videoCallback = Module.addFunction(function ($bufferPtr, size, width, height, pts) {
+                console.log(`${pts} ${size} ${width} ${height}`);
+                let arrayBuffer = Module.HEAPU8.subarray($bufferPtr, $bufferPtr + size);
+                renderList.push({
+                    buffer: new Uint8Array(arrayBuffer),
+                    width: width,
+                    height: height
+                })
+            }, 'viiiii');
+
+            Module._init_decoder(0, videoCallback);
+        }
+
+        function readFile(file_list) {
+            // init();
+            var file = file_list[0];
+            var reader = new FileReader();
+            reader.onload = function (e) {
+                let buffer = new Uint8Array(e.target.result);
+                console.log(buffer);
+                let offset = 0;
+                let pos = 0;
+
+                var size = buffer.length;
+                var bufferPtr = Module._malloc(size);
+                Module.HEAPU8.set(buffer, bufferPtr);
+                Module._decode_data(bufferPtr, size, 0);
+                Module._free(bufferPtr);
+            }
+            reader.readAsArrayBuffer(file);
+        }
+
+        function _yuv2RGBA(buffer, width, height, output) {
+            let ylen = width * height;
+            let uvlen = ylen / 4;
+
+            let bytesY = buffer.subarray(0, ylen)
+            let bytesCb = buffer.subarray(ylen, ylen + uvlen)
+            let bytesCr = buffer.subarray(ylen + uvlen, ylen + uvlen + uvlen)
+
+            // yuv420
+            let strideY = width,
+                strideCb = width / 2,
+                strideCr = width / 2,
+                outStride = width << 2;
+
+            let outPtr0 = 0,
+                outPtr1 = outStride,
+                Y0Ptr = 0, Y1Ptr = 0,
+                CbPtr = 0, CrPtr = 0,
+                colorCb = 0, colorCr = 0,
+                multY = 0,
+                multCrR = 0,
+                multCbCrG = 0,
+                multCbB = 0;
+            let ydec = 0;
+            for (let y = 0; y < height; y += 2) {
+                Y0Ptr = y * strideY | 0;
+                Y1Ptr = Y0Ptr + strideY | 0;
+                CbPtr = ydec * strideCb | 0;
+                CrPtr = ydec * strideCr | 0;
+                for (let x = 0; x < width; x += 2) {
+                    colorCb = bytesCb[CbPtr++] | 0;
+                    colorCr = bytesCr[CrPtr++] | 0;
+
+                    multCrR = (409 * colorCr | 0) - 57088 | 0;
+                    multCbCrG = (100 * colorCb | 0) + (208 * colorCr | 0) - 34816 | 0;
+                    multCbB = (516 * colorCb | 0) - 70912 | 0;
+
+                    multY = 298 * bytesY[Y0Ptr++] | 0;
+                    output[outPtr0] = (multY + multCrR) >> 8;
+                    output[outPtr0 + 1] = (multY - multCbCrG) >> 8;
+                    output[outPtr0 + 2] = (multY + multCbB) >> 8;
+                    outPtr0 += 4;
+
+                    multY = 298 * bytesY[Y0Ptr++] | 0;
+                    output[outPtr0] = (multY + multCrR) >> 8;
+                    output[outPtr0 + 1] = (multY - multCbCrG) >> 8;
+                    output[outPtr0 + 2] = (multY + multCbB) >> 8;
+                    outPtr0 += 4;
+
+                    multY = 298 * bytesY[Y1Ptr++] | 0;
+                    output[outPtr1] = (multY + multCrR) >> 8;
+                    output[outPtr1 + 1] = (multY - multCbCrG) >> 8;
+                    output[outPtr1 + 2] = (multY + multCbB) >> 8;
+                    outPtr1 += 4;
+
+                    multY = 298 * bytesY[Y1Ptr++] | 0;
+                    output[outPtr1] = (multY + multCrR) >> 8;
+                    output[outPtr1 + 1] = (multY - multCbCrG) >> 8;
+                    output[outPtr1 + 2] = (multY + multCbB) >> 8;
+                    outPtr1 += 4;
+                }
+                outPtr0 += outStride;
+                outPtr1 += outStride;
+                ydec++;
+            }
+        }
+    </script>
+</body>
+
+</html>
